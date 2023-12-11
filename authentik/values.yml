@@ -1,0 +1,49 @@
+authentik:
+    replicas: 2
+    secret_key: $uper$ecretP4ssw0rdmRh4ck3r
+    # This sends anonymous usage-data, stack traces on errors and
+    # performance data to sentry.io, and is fully opt-in
+    error_reporting:
+        enabled: false
+    postgresql:
+        password: $uper$ecretP4ssw0rdmRh4ck3r
+
+env:
+  TZ: Europe/Stockholm
+
+postgresql:
+  enabled: true
+  postgresqlPassword: $uper$ecretP4ssw0rdmRh4ck3r
+redis:
+  enabled: true
+  persistence:
+    enabled: true
+    size: 1Gi
+
+ingressRoute:
+  dashboard:
+    enabled: false
+
+providers:
+  kubernetesCRD:
+    enabled: true
+    ingressClass: traefik-external
+    allowExternalNameServices: true
+  kubernetesIngress:
+    enabled: true
+    allowExternalNameServices: true
+    publishedService:
+      enabled: false
+
+rbac:
+  enabled: true
+
+service:
+  enabled: true
+  type: LoadBalancer
+  annotations: {}
+  labels: {}
+  spec:
+    loadBalancerIP: 10.0.60.70 # this should be an IP in the VIP range
+  loadBalancerSourceRanges: []
+  externalIPs: []
