@@ -38,7 +38,7 @@ workers=(192.168.10.13 192.168.10.14)
 storages=(192.168.10.15 192.168.10.16 192.168.10.17)
 
 # Define the SSH certificate name
-certName=~/id_rsa
+certName=/home/ubuntu/id_rsa
 
 username="ubuntu"
 
@@ -89,6 +89,20 @@ do
 
     # Update the package lists
     ssh -i "$certName" "$username@$node" 'sudo apt-get update'
+
+    # Install kubectl
+    if ! ssh -t -i "$certName" "$username@$node" 'command -v kubectl &> /dev/null'; then
+        ssh -t -i "$certName" "$username@$node" 'sudo apt-get install -y kubectl'
+    fi
+
+    # Install helm
+    if ! ssh -t -i "$certName" "$username@$node" 'command -v helm &> /dev/null'; then
+        ssh -t -i "$certName" "$username@$node" 'curl https://baltocdn.com/helm/signing.asc | sudo apt-key add -'
+        ssh -t -i "$certName" "$username@$node" 'sudo apt-get install apt-transport-https --yes'
+        ssh -t -i "$certName" "$username@$node" 'echo "deb https://baltocdn.com/helm/stable/debian/ all main" | sudo tee /etc/apt/sources.list.d/helm-stable-debian.list'
+        ssh -t -i "$certName" "$username@$node" 'sudo apt-get update'
+        ssh -t -i "$certName" "$username@$node" 'sudo apt-get install helm'
+    fi
 done
 
 # Install RKE2 on the admin node
@@ -98,17 +112,24 @@ if ! ssh -i "$certName" "$username@$admin" 'command -v rke2 &> /dev/null'; then
    ssh -t -i "$certName" "$username@$admin" 'curl -sfL https://get.rke2.io | sudo sh -'
 fi
 
-# Check if the RKE2 service is already enabled
-if ! ssh -t -i "$certName" "$username@$admin" 'sudo systemctl is-enabled rke2-server.service &> /dev/null'; then
-    # Enable the RKE2 service to start on boot
-    ssh -t -i "$certName" "$username@$admin" 'sudo systemctl enable rke2-server.service'
-fi
+# Enable and start the RKE2 service on the admin node
+ssh -t -i "$certName" "$username@$admin" 'sudo systemctl enable --now rke2-server.service'
 
-# Check if the RKE2 service is already active
-if ! ssh -t -i "$certName" "$username@$admin" 'sudo systemctl is-active rke2-server.service &> /dev/null'; then
-    # Start the RKE2 service
-    ssh -t -i "$certName" "$username@$admin" 'sudo systemctl start rke2-server.service'
-fi
+# Copy the kubeconfig file to the user's home directory
+ssh -i "$certName" "$username@$admin" 'sudo mkdir -p /home/ubuntu/.kube && sudo cp /etc/rancher/rke2/rke2.yaml /home/ubuntu/.kube/config && sudo chown -R ubuntu:ubuntu /home/ubuntu/.kube'
+
+# Wait for all nodes to be ready
+ssh -i "$certName" "$username@$admin" 'kubectl wait --for=condition=Ready node --all --timeout=300s'
+
+# Install RKE2 on the master nodes
+for node in "${masters[@]}"
+do
+    # Download and install RKE2
+    ssh -t -i "$certName" "$username@$node" "curl -sfL https://get.rke2.io | INSTALL_RKE2_EXEC='server --token $token --server https://$admin:9345' sudo sh -"
+
+    # Enable and start the RKE2 service on the master nodes
+    ssh -t -i "$certName" "$username@$node" 'sudo systemctl enable --now rke2-server.service'
+done
 
 # Get the RKE2 token from the admin node
 # This loop will keep trying to get the token until it succeeds
@@ -127,45 +148,37 @@ done
 # Install RKE2 on the master nodes
 for node in "${masters[@]}"
 do
-    # Check if RKE2 is already installed
-    if ! ssh -t -i "$certName" "$username@$node" 'command -v rke2 &> /dev/null'; then
-        # Download and install RKE2
-        ssh -t -i "$certName" "$username@$node" "curl -sfL https://get.rke2.io | INSTALL_RKE2_EXEC='server --token $token --server https://$admin:9345' sudo sh -"
-    fi
+    # Download and install RKE2
+    ssh -t -i "$certName" "$username@$node" "curl -sfL https://get.rke2.io | INSTALL_RKE2_EXEC='server --token $token --server https://$admin:9345' sudo sh -"
 
-    # Check if the RKE2 service is already enabled
-    if ! ssh -t -i "$certName" "$username@$node" 'sudo systemctl is-enabled rke2-server.service &> /dev/null'; then
-        # Enable the RKE2 service to start on boot
-        ssh -t -i "$certName" "$username@$node" 'sudo systemctl enable rke2-server.service'
-    fi
-
-    # Check if the RKE2 service is already active
-    if ! ssh -t -i "$certName" "$username@$node" 'sudo systemctl is-active rke2-server.service &> /dev/null'; then
-        # Start the RKE2 service
-        ssh -t -i "$certName" "$username@$node" 'sudo systemctl start rke2-server.service'
-    fi
+    # Enable and start the RKE2 service on the master nodes
+    ssh -t -i "$certName" "$username@$node" 'sudo systemctl enable --now rke2-server.service'
 done
+
+# Generate the token on the server node first
+token=$(ssh -i "$certName" "$username@$admin" 'sudo cat /var/lib/rancher/rke2/server/node-token')
 
 # Install RKE2 on the worker nodes
 for node in "${workers[@]}"
 do
-    # Check if RKE2 is already installed
-    if ! ssh -t -i "$certName" "$username@$node" 'command -v rke2 &> /dev/null'; then
-        # Download and install RKE2
-        ssh -t -i "$certName" "$username@$node" "curl -sfL https://get.rke2.io | INSTALL_RKE2_EXEC='agent --token $token --server https://$admin:9345' sudo sh -"
-    fi
+    # Create the RKE2 configuration directory
+    ssh -t -i "$certName" "$username@$node" 'sudo mkdir -p /etc/rancher/rke2'
+    
+    # Set the token and server in the RKE2 configuration file
+    ssh -t -i "$certName" "$username@$node" "echo 'token: $token' | sudo tee /etc/rancher/rke2/config.yaml"
+    ssh -t -i "$certName" "$username@$node" "echo 'server: https://$admin:9345' | sudo tee -a /etc/rancher/rke2/config.yaml"
+    
+    # Download and install RKE2
+    ssh -t -i "$certName" "$username@$node" "curl -sfL https://get.rke2.io | INSTALL_RKE2_EXEC='agent' sudo sh -"
 
-    # Check if the RKE2 agent service is already enabled
-    if ! ssh -t -i "$certName" "$username@$node" 'sudo systemctl is-enabled rke2-agent.service &> /dev/null'; then
-        # Enable the RKE2 agent service to start on boot
-        ssh -t -i "$certName" "$username@$node" 'sudo systemctl enable rke2-agent.service'
-    fi
-
-    # Check if the RKE2 agent service is already active
-    if ! ssh -t -i "$certName" "$username@$node" 'sudo systemctl is-active rke2-agent.service &> /dev/null'; then
-        # Start the RKE2 agent service immediately
-        ssh -t -i "$certName" "$username@$node" 'sudo systemctl start rke2-agent.service'
-    fi
+    # Start the RKE2 agent service immediately
+    ssh -t -i "$certName" "$username@$node" 'sudo systemctl start rke2-agent.service' || {
+        echo "Failed to start rke2-agent.service on $node"
+        echo "Fetching service status and logs..."
+        ssh -t -i "$certName" "$username@$node" 'sudo systemctl status rke2-agent.service'
+        ssh -t -i "$certName" "$username@$node" 'sudo journalctl -xeu rke2-agent.service'
+        exit 1
+    }
 done
 
 # Wait for all nodes to be ready
@@ -176,28 +189,46 @@ ssh -i "$certName" "$username@$admin" 'kubectl wait --for=condition=Ready node -
 # Cilium is a networking and network policy plugin for Kubernetes
 # Check if the Cilium namespace already exists
 if ! ssh -i "$certName" "$username@$admin" 'kubectl get namespace cilium &> /dev/null'; then
-    # Create a new namespace for Cilium
     ssh -i "$certName" "$username@$admin" 'kubectl create namespace cilium'
 fi
 
-# Check if the Cilium Helm repository already exists
 if ! ssh -i "$certName" "$username@$admin" 'helm repo list | grep cilium &> /dev/null'; then
-    # Add the Cilium Helm repository
     ssh -i "$certName" "$username@$admin" 'helm repo add cilium https://helm.cilium.io/'
 fi
 
-# Check if Cilium is already installed
+# Create the /cilium directory if it doesn't exist and change its ownership to the current user
+ssh -i "$certName" "$username@$admin" 'sudo mkdir -p /cilium && sudo chown $(whoami) /cilium'
+
+# Download the Cilium values.yaml file
+ssh -i "$certName" "$username@$admin" 'wget -O /cilium/values.yaml https://raw.githubusercontent.com/cilium/cilium/v1.9.5/install/kubernetes/cilium/values.yaml'
+
+# Download the Cilium values.yaml file
+ssh -i "$certName" "$username@$admin" 'wget -O /cilium/values.yaml https://raw.githubusercontent.com/cilium/cilium/v1.9.5/install/kubernetes/cilium/values.yaml'
+# Define the environment parameters
+environment="production"
+
+# Write the admin IP, master IPs, worker IPs, storage IPs, and environment to the values.yaml file
+ssh -i "$certName" "$username@$admin" "echo \"admin: $admin\" > /cilium/values.yaml"
+ssh -i "$certName" "$username@$admin" "echo \"masters: ${masters[*]}\" >> /cilium/values.yaml"
+ssh -i "$certName" "$username@$admin" "echo \"workers: ${workers[*]}\" >> /cilium/values.yaml"
+ssh -i "$certName" "$username@$admin" "echo \"storages: ${storages[*]}\" >> /cilium/values.yaml"
+ssh -i "$certName" "$username@$admin" "echo \"environment: $environment\" >> /cilium/values.yaml"
+
+# Modify the values.yaml file as needed
+# For example, you can uncomment and modify the following line to use Kubernetes as the IPAM method
+# ssh -i "$certName" "$username@$admin" 'sed -i "s/# ipam: kubernetes/ipam: kubernetes/" /cilium/values.yaml'
+
 if ! ssh -i "$certName" "$username@$admin" 'helm list -n cilium | grep cilium &> /dev/null'; then
-    # Install Cilium using Helm
-    ssh -i "$certName" "$username@$admin" 'helm install cilium cilium/cilium --version 1.9.5 --namespace cilium'
+    # Install Cilium with custom configuration
+    ssh -i "$certName" "$username@$admin" 'helm install cilium cilium/cilium --version 1.9.5 --namespace cilium -f /cilium/values.yaml'
 fi
 
 # Wait for Cilium to be ready
 # This loop checks the status of the Cilium pods every 5 seconds
 # Once all Cilium pods are in the 'Running' state, the loop breaks
 while true; do
-    status=$(ssh -i "$certName" "$username@$admin" 'kubectl -n cilium get pods -l k8s-app=cilium | grep -v NAME | awk '\''{print $3}'\''')
-    if [[ "$status" == "Running" ]]; then
+    status=$(ssh -i "$certName" "$username@$admin" 'kubectl -n cilium get pods -l k8s-app=cilium -o jsonpath="{.items[*].status.conditions[?(@.type==\"Ready\")].status}"')
+    if [[ "$status" == "True" ]]; then
         break
     fi
     echo "Waiting for Cilium to be ready..."
