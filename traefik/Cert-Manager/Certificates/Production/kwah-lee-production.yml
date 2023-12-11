@@ -1,0 +1,15 @@
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: domain # change ot your domain
+  namespace: default
+spec:
+  secretName: domain-tls # change to your secretname
+  issuerRef:
+    name: letsencrypt-production
+    kind: ClusterIssuer
+  commonName: "*.domain.io" # change to your domain
+  dnsNames:
+  - "*.domain.io" # change to your domain
+  - domain.io # change to your domain
