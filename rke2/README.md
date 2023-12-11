@@ -1,4 +1,4 @@
-# RKE2 Deployment Script
+# RKE2 Deployment Script - NOT READY TO DEPLOY - DO NOT USE
 
 This repository contains a Bash script for deploying RKE2 on a cluster of nodes. The script is designed to be run on a Linux system and assumes that the nodes in your cluster are running Ubuntu.
 
