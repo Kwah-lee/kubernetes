@@ -306,7 +306,7 @@ ssh -i $certName $username@$admin 'helm repo add traefik https://helm.traefik.io
 # Download and modify the values file
 # Check if the values file already exists
 if ! ssh -i $certName $username@$admin 'test -f values.yaml'; then
-    ssh -i $certName $username@$admin 'wget https://raw.githubusercontent.com/JamesTurland/JimsGarage/main/Kubernetes/Traefik-PiHole/Helm/Traefik/values.yaml'
+    ssh -i $certName $username@$admin 'wget https://raw.githubusercontent.com/Kwah-lee/kubernetes/main/traefik/values.yml'
     ssh -i $certName $username@$admin 'sed -i "s/placeholder-ip/192.168.1.100/g" values.yaml'  # Replace with your actual IP
     ssh -i $certName $username@$admin 'sed -i "s/placeholder-lb/lb-config/g" values.yaml'  # Replace with your actual LB config
 fi
